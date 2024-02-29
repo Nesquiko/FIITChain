@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "fiitcoin"
+]
+
+resolver = "2"
