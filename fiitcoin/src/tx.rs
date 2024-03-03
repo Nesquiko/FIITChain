@@ -1,10 +1,9 @@
-use std::usize;
+use core::fmt;
 
 use rsa::{
-    pkcs1v15::SigningKey,
+    pkcs1v15::{SigningKey, VerifyingKey},
     signature::{SignatureEncoding, Signer},
     traits::PublicKeyParts,
-    RsaPublicKey,
 };
 use sha2::{Digest, Sha256};
 
@@ -12,10 +11,10 @@ pub struct Incomplete;
 pub type Finalized = [u8; 32];
 
 #[derive(Debug)]
-pub struct Tx<'a, S> {
+pub struct Tx<S> {
     hash: S,
     inputs: Vec<Input>,
-    outputs: Vec<Output<'a>>,
+    outputs: Vec<Output>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,14 +28,82 @@ pub struct Input {
     signature: Option<Box<[u8]>>,
 }
 
-#[derive(Debug)]
-pub struct Output<'a> {
-    /// Value of this output in FIITCoins
-    value: u64,
-    rec_pub_key: &'a RsaPublicKey,
+impl Input {
+    pub fn output_tx_hash(&self) -> [u8; 32] {
+        self.output_tx_hash
+    }
+
+    pub fn output_idx(&self) -> u8 {
+        self.output_idx
+    }
+
+    pub fn signature(&self) -> Option<&Box<[u8]>> {
+        self.signature.as_ref()
+    }
 }
 
-impl<'a> Tx<'a, Incomplete> {
+#[derive(Debug)]
+pub struct Output {
+    /// Value of this output in FIITCoins
+    value: u32,
+    verifying_key: VerifyingKey<Sha256>,
+}
+
+impl Output {
+    pub fn verifying_key(&self) -> &VerifyingKey<Sha256> {
+        &self.verifying_key
+    }
+
+    pub fn value(&self) -> u32 {
+        self.value
+    }
+}
+
+impl<S> Tx<S> {
+    /// Returns representation of this transaction in bytes
+    pub fn raw_tx(&self) -> Result<Vec<u8>, TxError> {
+        let mut tx = vec![];
+
+        for input in self.inputs.iter() {
+            match &input.signature {
+                Some(sig) => {
+                    tx.extend(input.output_tx_hash);
+                    tx.push(input.output_idx);
+                    tx.extend(sig.iter());
+                }
+                None => return Err(TxError::UnsignedInput(input.clone())),
+            }
+        }
+        for output in self.outputs.iter() {
+            tx.extend(output.value.to_be_bytes());
+            tx.extend(output.verifying_key.as_ref().e().to_bytes_be());
+            tx.extend(output.verifying_key.as_ref().n().to_bytes_be());
+        }
+
+        Ok(tx)
+    }
+
+    pub fn raw_tx_from_one_input(&self, idx: u8) -> Result<Vec<u8>, TxError> {
+        let input = match self.inputs.get(usize::from(idx)) {
+            Some(inp) => inp,
+            None => return Err(TxError::InputIndexOutOfBounds(idx)),
+        };
+
+        let mut tx = vec![];
+        tx.extend(input.output_tx_hash);
+        tx.push(input.output_idx);
+
+        for output in self.outputs.iter() {
+            tx.extend(output.value.to_be_bytes());
+            tx.extend(output.verifying_key.as_ref().e().to_bytes_be());
+            tx.extend(output.verifying_key.as_ref().n().to_bytes_be());
+        }
+
+        Ok(tx)
+    }
+}
+
+impl Tx<Incomplete> {
     pub fn new() -> Self {
         Self {
             hash: Incomplete {},
@@ -48,14 +115,14 @@ impl<'a> Tx<'a, Incomplete> {
     pub fn sing_input_and_finalize(
         mut self,
         idx: u8,
-        sk: &SigningKey<Sha256>,
-    ) -> Result<Tx<'a, Finalized>, TxError> {
-        self.sign_input(idx, sk)?;
+        sender_sk: &SigningKey<Sha256>,
+    ) -> Result<Tx<Finalized>, TxError> {
+        self.sign_input(idx, sender_sk)?;
         self.finalize()
     }
 
     /// Finalizes this transaction by internally hashing its contents and returning finalized Tx
-    pub fn finalize(self) -> Result<Tx<'a, Finalized>, TxError> {
+    pub fn finalize(self) -> Result<Tx<Finalized>, TxError> {
         let tx_bytes = self.raw_tx()?;
         let mut hasher = Sha256::new();
         hasher.update(tx_bytes);
@@ -80,29 +147,6 @@ impl<'a> Tx<'a, Incomplete> {
         Ok(())
     }
 
-    /// Returns representation of this transaction in bytes
-    pub fn raw_tx(&self) -> Result<Vec<u8>, TxError> {
-        let mut tx = vec![];
-
-        for input in self.inputs.iter() {
-            match &input.signature {
-                Some(sig) => {
-                    tx.extend(input.output_tx_hash);
-                    tx.push(input.output_idx);
-                    tx.extend(sig.iter());
-                }
-                None => return Err(TxError::UnsignedInput(input.clone())),
-            }
-        }
-        for output in self.outputs.iter() {
-            tx.extend(output.value.to_be_bytes());
-            tx.extend(output.rec_pub_key.e().to_bytes_be());
-            tx.extend(output.rec_pub_key.n().to_bytes_be());
-        }
-
-        Ok(tx)
-    }
-
     pub fn add_input(&mut self, output_tx_hash: [u8; 32], output_idx: u8) {
         self.inputs.push(Input {
             output_tx_hash,
@@ -111,38 +155,15 @@ impl<'a> Tx<'a, Incomplete> {
         })
     }
 
-    pub fn add_output(&mut self, value: u64, rec_pub_key: &'a RsaPublicKey) {
-        self.outputs.push(Output { value, rec_pub_key });
-    }
-
-    fn raw_tx_from_one_input(&self, idx: u8) -> Result<Vec<u8>, TxError> {
-        let input: &Input;
-        match self.inputs.get(usize::from(idx)) {
-            Some(inp) => input = inp,
-            None => return Err(TxError::InputIndexOutOfBounds(idx)),
-        }
-
-        let mut tx = vec![];
-        match &input.signature {
-            Some(sig) => {
-                tx.extend(input.output_tx_hash);
-                tx.push(input.output_idx);
-                tx.extend(sig.iter());
-            }
-            None => return Err(TxError::UnsignedInput(input.clone())),
-        }
-
-        for output in self.outputs.iter() {
-            tx.extend(output.value.to_be_bytes());
-            tx.extend(output.rec_pub_key.e().to_bytes_be());
-            tx.extend(output.rec_pub_key.n().to_bytes_be());
-        }
-
-        Ok(tx)
+    pub fn add_output(&mut self, value: u32, receiver_verifying_key: &VerifyingKey<Sha256>) {
+        self.outputs.push(Output {
+            value,
+            verifying_key: receiver_verifying_key.clone(),
+        });
     }
 }
 
-impl<'a> Tx<'a, Finalized> {
+impl Tx<Finalized> {
     pub fn hash(&self) -> [u8; 32] {
         self.hash
     }
@@ -154,6 +175,10 @@ impl<'a> Tx<'a, Finalized> {
     pub fn inputs(&self) -> &Vec<Input> {
         &self.inputs
     }
+
+    pub fn outputs(&self) -> &Vec<Output> {
+        &self.outputs
+    }
 }
 
 #[derive(Debug)]
@@ -161,3 +186,14 @@ pub enum TxError {
     UnsignedInput(Input),
     InputIndexOutOfBounds(u8),
 }
+
+impl fmt::Display for TxError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TxError::UnsignedInput(input) => write!(f, "unsigned input {:?}", input),
+            TxError::InputIndexOutOfBounds(idx) => write!(f, "index {} out of bounds", idx),
+        }
+    }
+}
+
+impl std::error::Error for TxError {}
