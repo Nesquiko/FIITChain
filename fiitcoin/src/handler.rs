@@ -1,7 +1,9 @@
+use std::collections::HashSet;
+
 use rsa::{pkcs1v15::Signature, signature::Verifier};
 
 use crate::{
-    tx::{Finalized, Input, Tx},
+    tx::{raw_tx_from_one_input, Input, Tx},
     utxo::{UTXOPool, UTXO},
 };
 
@@ -13,7 +15,7 @@ pub trait TxHandler<'a> {
     /// # Beware
     /// Transactions can be dependent on other ones. Also, multiple
     /// transactions can reference same output.
-    fn handle(&mut self, possible_txs: Vec<Tx<Finalized>>) -> Vec<Tx<Finalized>>;
+    fn handle(&mut self, possible_txs: Vec<&'a Tx>) -> Vec<&'a Tx>;
 
     /// Checks if:
     ///     1. All UTXO inputs are in pool
@@ -21,15 +23,15 @@ pub trait TxHandler<'a> {
     ///     3. No UTXO is used more than once
     ///     4. Sum of outputs is not negative
     ///     5. Sum of inputs >= Sum of outputs
-    fn is_tx_valid(&self, tx: &Tx<Finalized>) -> bool;
+    fn is_tx_valid(&self, tx: &Tx) -> bool;
 }
 
-pub struct Handler<'a> {
-    pool: UTXOPool<'a>,
+pub struct Handler {
+    pool: UTXOPool,
 }
 
-impl<'a> Handler<'a> {
-    pub fn new(pool: UTXOPool<'a>) -> Self {
+impl Handler {
+    pub fn new(pool: UTXOPool) -> Self {
         Self { pool }
     }
 
@@ -37,28 +39,69 @@ impl<'a> Handler<'a> {
         UTXO::new(input.output_tx_hash(), input.output_idx())
     }
 
-    fn apply_tx(&mut self, tx: &Tx<Finalized>) {
+    fn apply_tx(&mut self, tx: &Tx) {
         for input in tx.inputs().iter() {
-            self.pool.set_utxo_as_used(&self.input_to_utxo(input));
+            self.pool.remove_utxo(&self.input_to_utxo(input));
+        }
+        for (i, output) in tx.outputs().iter().enumerate() {
+            let utxo = UTXO::new(tx.hash(), i.try_into().unwrap());
+            // clone is here necessary, because I want to return the tx back to
+            // caller, so I can't consume it
+            self.pool.add_utxo(utxo, output.clone())
         }
     }
-}
 
-impl<'a> TxHandler<'a> for Handler<'a> {
-    fn handle(&mut self, possible_txs: Vec<Tx<Finalized>>) -> Vec<Tx<Finalized>> {
-        possible_txs
-            .into_iter()
-            .filter(|tx| {
-                if !self.is_tx_valid(tx) {
-                    return false;
-                }
-                self.apply_tx(tx);
-                true
-            })
-            .collect()
+    fn is_input_in_pool(&self, input: &Input) -> bool {
+        self.pool.contains(&self.input_to_utxo(input))
     }
 
-    fn is_tx_valid(&self, tx: &Tx<Finalized>) -> bool {
+    /// Filters independent txs from dependent ones, applies them and returns both sets
+    fn handle_independent<'a>(&mut self, txs: Vec<&'a Tx>) -> (Vec<&'a Tx>, Vec<&'a Tx>) {
+        let mut handled = vec![];
+        let mut dependent = vec![];
+        let tx_set: HashSet<[u8; 32]> = txs.iter().map(|&tx| tx.hash()).collect();
+
+        for &tx in txs.iter() {
+            if tx.inputs().iter().all(|i| self.is_input_in_pool(i)) {
+                // tx is only dependent on outputs in pool
+                if self.is_tx_valid(tx) {
+                    self.apply_tx(tx);
+                    handled.push(tx);
+                }
+            } else if tx
+                .inputs()
+                .iter()
+                .any(|i| tx_set.contains(&i.output_tx_hash()))
+            {
+                // tx is dependent on some outputs from this batch
+                dependent.push(tx)
+            }
+        }
+
+        (handled, dependent)
+    }
+
+    // fn balance_of(&self, )
+}
+
+impl<'a> TxHandler<'a> for Handler {
+    fn handle(&mut self, possible_txs: Vec<&'a Tx>) -> Vec<&'a Tx> {
+        let mut handled: Vec<&'a Tx> = vec![];
+        let mut to_handle = possible_txs;
+
+        loop {
+            let (independent, dependent) = self.handle_independent(to_handle);
+            handled.extend(independent);
+            if dependent.is_empty() {
+                break;
+            }
+            to_handle = dependent;
+        }
+
+        handled
+    }
+
+    fn is_tx_valid(&self, tx: &Tx) -> bool {
         let mut in_sum = 0;
         for (i, input) in tx.inputs().iter().enumerate() {
             let output = match self.pool.utxo_output(&self.input_to_utxo(input)) {
@@ -89,13 +132,14 @@ impl<'a> TxHandler<'a> for Handler<'a> {
                 }
             };
 
-            let raw_tx = match tx.raw_tx_from_one_input(i.try_into().unwrap()) {
-                Ok(raw) => raw,
-                Err(err) => {
-                    log::debug!("failed to get raw tx, {:?}", err);
-                    return false;
-                }
-            };
+            let raw_tx =
+                match raw_tx_from_one_input(tx.inputs(), tx.outputs(), i.try_into().unwrap()) {
+                    Ok(raw) => raw,
+                    Err(err) => {
+                        log::debug!("failed to get raw tx, {:?}", err);
+                        return false;
+                    }
+                };
 
             match output.verifying_key().verify(&raw_tx, &signature) {
                 Ok(_) => {}
@@ -103,15 +147,6 @@ impl<'a> TxHandler<'a> for Handler<'a> {
                     log::debug!("invalid signature, {:?}", err);
                     return false;
                 }
-            }
-
-            if output.used() {
-                log::debug!(
-                    "output from {:x?} and index {} not found",
-                    input.output_tx_hash(),
-                    input.output_idx()
-                );
-                return false;
             }
 
             in_sum += output.value();

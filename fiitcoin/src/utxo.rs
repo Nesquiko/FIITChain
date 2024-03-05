@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 
-use rsa::pkcs1v15::VerifyingKey;
-use sha2::Sha256;
+use rsa::RsaPublicKey;
 
-use crate::tx::{self};
+use crate::tx::Output;
 
 #[derive(Eq, PartialEq, Hash, Clone)]
 pub struct UTXO {
@@ -23,65 +22,38 @@ impl UTXO {
 }
 
 #[derive(Clone)]
-pub struct UTXOOutput<'a> {
-    output: &'a tx::Output,
-    used: bool,
-}
-
-impl<'a> UTXOOutput<'a> {
-    pub fn verifying_key(&self) -> &VerifyingKey<Sha256> {
-        self.output.verifying_key()
-    }
-
-    pub fn used(&self) -> bool {
-        self.used
-    }
-
-    pub fn value(&self) -> u32 {
-        self.output.value()
-    }
-
-    pub fn set_used(&mut self, used: bool) {
-        self.used = used;
-    }
-}
-
-#[derive(Clone)]
-pub struct UTXOPool<'a> {
+pub struct UTXOPool {
     /// collection of unspent UTXO mapped to corresponding tx output
-    utxos: HashMap<UTXO, UTXOOutput<'a>>,
+    utxos: HashMap<UTXO, Output>,
 }
 
-impl<'a> UTXOPool<'a> {
+impl UTXOPool {
     pub fn new() -> Self {
         Self {
             utxos: HashMap::new(),
         }
     }
 
-    pub fn add_utxo(&mut self, utxo: UTXO, output: &'a tx::Output) {
-        self.utxos.insert(
-            utxo,
-            UTXOOutput {
-                output,
-                used: false,
-            },
-        );
+    pub fn add_utxo(&mut self, utxo: UTXO, output: Output) {
+        self.utxos.insert(utxo, output.clone());
     }
 
     pub fn remove_utxo(&mut self, utxo: &UTXO) {
         self.utxos.remove(utxo);
     }
 
-    pub fn utxo_output(&self, utxo: &UTXO) -> Option<&'a UTXOOutput> {
+    pub fn utxo_output(&self, utxo: &UTXO) -> Option<&Output> {
         self.utxos.get(utxo)
-    }
-
-    pub fn set_utxo_as_used(&mut self, utxo: &UTXO) {
-        self.utxos.get_mut(utxo).unwrap().used = true;
     }
 
     pub fn contains(&self, utxo: &UTXO) -> bool {
         self.utxos.contains_key(utxo)
+    }
+
+    pub fn utxos_of(&self, pub_key: &RsaPublicKey) -> Vec<&Output> {
+        self.utxos
+            .values()
+            .filter(|o| o.verifying_key().as_ref() == pub_key)
+            .collect()
     }
 }
