@@ -91,7 +91,7 @@ impl UnsignedTx {
 
     /// Finalizes this transaction by internally hashing its contents and returning finalized Tx
     pub fn finalize(self) -> Result<Tx, TxError> {
-        let tx_bytes = self.raw_tx()?;
+        let tx_bytes = raw_tx(&self.inputs, &self.outputs)?;
         let mut hasher = Sha256::new();
         hasher.update(tx_bytes);
         Ok(Tx {
@@ -114,29 +114,6 @@ impl UnsignedTx {
             value,
             verifying_key: receiver_verifying_key.clone(),
         });
-    }
-
-    /// Returns representation of this transaction in bytes
-    fn raw_tx(&self) -> Result<Vec<u8>, TxError> {
-        let mut tx = vec![];
-
-        for input in self.inputs.iter() {
-            match &input.signature {
-                Some(sig) => {
-                    tx.extend(input.output_tx_hash);
-                    tx.push(input.output_idx);
-                    tx.extend(sig.iter());
-                }
-                None => return Err(TxError::UnsignedInput(input.clone())),
-            }
-        }
-        for output in self.outputs.iter() {
-            tx.extend(output.value.to_be_bytes());
-            tx.extend(output.verifying_key.as_ref().e().to_bytes_be());
-            tx.extend(output.verifying_key.as_ref().n().to_bytes_be());
-        }
-
-        Ok(tx)
     }
 }
 
@@ -167,6 +144,12 @@ impl Tx {
     pub fn outputs(&self) -> &Vec<Output> {
         &self.outputs
     }
+
+    /// # DO NOT USE, don't use this function outside tests!
+    pub fn force_signature_on_input(&mut self, idx: u8, signature: Box<[u8]>) {
+        let input = self.inputs.get_mut(usize::from(idx)).unwrap();
+        input.signature = Some(signature);
+    }
 }
 
 pub fn raw_tx_from_one_input(
@@ -188,6 +171,29 @@ pub fn raw_tx_from_one_input(
     tx.extend(input.output_tx_hash);
     tx.push(input.output_idx);
 
+    for output in outputs.iter() {
+        tx.extend(output.value.to_be_bytes());
+        tx.extend(output.verifying_key.as_ref().e().to_bytes_be());
+        tx.extend(output.verifying_key.as_ref().n().to_bytes_be());
+    }
+
+    Ok(tx)
+}
+
+/// Returns representation of this transaction in bytes
+pub fn raw_tx(inputs: &Vec<Input>, outputs: &Vec<Output>) -> Result<Vec<u8>, TxError> {
+    let mut tx = vec![];
+
+    for input in inputs.iter() {
+        match &input.signature {
+            Some(sig) => {
+                tx.extend(input.output_tx_hash);
+                tx.push(input.output_idx);
+                tx.extend(sig.iter());
+            }
+            None => return Err(TxError::UnsignedInput(input.clone())),
+        }
+    }
     for output in outputs.iter() {
         tx.extend(output.value.to_be_bytes());
         tx.extend(output.verifying_key.as_ref().e().to_bytes_be());

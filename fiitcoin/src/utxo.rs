@@ -34,7 +34,7 @@ impl UTXOPool {
         }
     }
 
-    pub fn add_utxo(&mut self, utxo: UTXO, output: Output) {
+    pub fn add_utxo(&mut self, utxo: UTXO, output: &Output) {
         self.utxos.insert(utxo, output.clone());
     }
 

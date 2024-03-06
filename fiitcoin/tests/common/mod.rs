@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 
 static INIT: Once = Once::new();
 
+pub const OUTPUT_VALUE: u32 = 100;
+
 pub fn initialize() {
     INIT.call_once(|| {
         env_logger::init();
@@ -46,6 +48,16 @@ pub struct NewTxParams<'a> {
 }
 
 pub fn new_tx(params: NewTxParams) -> Tx {
+    let tx = create_unsigned_tx(&params);
+    tx.sing_inputs_and_finalize(&params.sender.sk).unwrap()
+}
+
+pub fn new_tx_forged_signatures(params: NewTxParams, adversary: &Participant) -> Tx {
+    let tx = create_unsigned_tx(&params);
+    tx.sing_inputs_and_finalize(&adversary.sk).unwrap()
+}
+
+fn create_unsigned_tx(params: &NewTxParams) -> UnsignedTx {
     let NewTxParams {
         sender,
         inputs,
@@ -62,19 +74,20 @@ pub fn new_tx(params: NewTxParams) -> Tx {
     }
 
     if let Some(to_return) = return_to_sender {
-        tx.add_output(to_return, &sender.vk);
+        tx.add_output(*to_return, &sender.vk);
     }
-
-    tx.sing_inputs_and_finalize(&sender.sk).unwrap()
+    tx
 }
 
-pub fn setup_pool(receiver: &Participant, initial_balance: u32) -> (UTXOPool, Tx) {
+pub fn setup_pool(receiver: &Participant, output_value: u32, root_outputs: u8) -> (UTXOPool, Tx) {
     let mut hasher = Sha256::new();
     hasher.update("genesis-hash");
     let genesis_hash: [u8; 32] = hasher.finalize().into();
 
     let mut root_tx = UnsignedTx::new();
-    root_tx.add_output(initial_balance, &receiver.vk);
+    for _ in 0..root_outputs {
+        root_tx.add_output(output_value, &receiver.vk);
+    }
     root_tx.add_input(genesis_hash, 0);
     let root_tx = root_tx.sing_inputs_and_finalize(&receiver.sk).unwrap();
 
@@ -84,7 +97,7 @@ pub fn setup_pool(receiver: &Participant, initial_balance: u32) -> (UTXOPool, Tx
         let output_idx = output_idx.try_into().unwrap();
         let root_utxo = UTXO::new(root_tx.hash(), output_idx);
         match root_tx.output(output_idx) {
-            Some(output) => utxo_pool.add_utxo(root_utxo, output.clone()),
+            Some(output) => utxo_pool.add_utxo(root_utxo, &output),
             None => panic!(
                 "tx output at index {} out of bounds, outputs len {}",
                 output_idx,
