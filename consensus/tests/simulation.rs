@@ -4,81 +4,111 @@ use std::{
 };
 
 use consensus::{
-    node::{ByzantineNode, Node, TrustedNode},
+    node::{ByzantineBehaviour, ByzantineNode, Node, TrustedNode},
     tx::{Candidate, Tx},
 };
-use rand::Rng;
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ROUNDS: u64 = 1_000;
+const ROUNDS: u64 = 20;
 const NODES: usize = 100;
 const TXS: usize = 500;
 
 #[test]
 fn simulation() {
-    let p_graph: f64 = 0.1; // can be .1, .2, .3
-    let p_byzantine: f64 = 0.15; // can be .15, .3, .54
-    let p_tx_dist: f64 = 0.01; // can be .01, .05, .1
+    env_logger::init();
+    let p_graph: f64 = 0.1;
+    let p_byzantine: f64 = 0.15;
+    let p_tx_dist: f64 = 0.01;
 
     let (mut nodes, valid_tx_ids, followees) = init(p_graph, p_byzantine, p_tx_dist);
 
     for _ in 0..ROUNDS {
+        // key is the index of a Node and value is vec of candidate txs from
+        // other nodes
         let mut all_proposals: HashMap<usize, Vec<Candidate>> = HashMap::new();
 
         for i in 0..NODES {
             let proposals = nodes.get(i).unwrap().followers_send();
             for tx in proposals.iter() {
-                if !valid_tx_ids.contains(&tx.id) {
-                    continue;
+                if !valid_tx_ids.contains(&tx) {
+                    continue; // controls that each tx is valid
                 }
 
+                // for each of nodes followers, add tx to their proposals for this turn
                 for j in 0..NODES {
                     if !followees[j][i] {
-                        continue;
+                        continue; // tx is only proposed if `j` follows `i`
                     }
 
-                    if !all_proposals.contains_key(&j) {
-                        all_proposals.insert(j, vec![]);
-                    }
-                    let candidate = Candidate::new(tx.id, i.try_into().unwrap());
-                    all_proposals.get_mut(&j).unwrap().push(candidate);
+                    let candidate = Candidate::new(*tx, i.try_into().unwrap());
+                    all_proposals.entry(j).or_insert(vec![]).push(candidate);
                 }
             }
         }
 
+        // distributes proposals made in this turn to followers
         for i in 0..NODES {
-            if all_proposals.contains_key(&i) {
-                nodes
-                    .get_mut(i)
-                    .unwrap()
-                    .followees_receive(all_proposals.get(&i).unwrap());
+            if !all_proposals.contains_key(&i) {
+                continue;
             }
+            nodes
+                .get_mut(i)
+                .unwrap()
+                .followees_receive(all_proposals.get(&i).unwrap());
         }
     }
 
     results(&nodes);
 }
 
+/// Returns initialized Nodes, set of valid tx ids and a followers/followee matrix.
+///
+/// # Arguments
+///
+/// * `p_graph` - probability that an edge will exist, can be .1, .2, .3
+/// * `p_byzantine` - probability that a Node is byzantine, can be .15, .3, .45
+/// * `p_tx_dist` - probability that a tx will be distrubed to a Node, can be .01, .05, .1
 fn init(
     p_graph: f64,
     p_byzantine: f64,
     p_tx_dist: f64,
 ) -> (
     Vec<Box<dyn Node<NODES>>>,
-    HashSet<u64>,
+    HashSet<Tx>,
     [[bool; NODES]; NODES],
 ) {
     let mut nodes: Vec<Box<dyn Node<NODES>>> = Vec::with_capacity(NODES);
-    let mut rng = rand::thread_rng();
+    // Repeatable randomness, either change seed or use `rand::thread_rng()`
+    // for pseudo randomness
+    let mut rng = StdRng::seed_from_u64(123124);
+    let mut byzantine = 0;
     for i in 0..NODES {
         let node: Box<dyn Node<NODES>>;
         if rng.gen_bool(p_byzantine) {
-            node = Box::new(ByzantineNode::new(p_graph, p_byzantine, p_tx_dist, ROUNDS));
+            let behaviour = match byzantine % 3 {
+                0 => ByzantineBehaviour::Dead,
+                1 => ByzantineBehaviour::Selfish,
+                _ => ByzantineBehaviour::Mix(0.5),
+            };
+            node = Box::new(ByzantineNode::new(
+                behaviour,
+                p_graph,
+                p_byzantine,
+                p_tx_dist,
+                ROUNDS,
+            ));
+            byzantine += 1;
         } else {
             node = Box::new(TrustedNode::new(p_graph, p_byzantine, p_tx_dist, ROUNDS));
         }
 
         nodes.insert(i, node);
     }
+    log::info!(
+        "There are {} trusted nodes and {} byzantine",
+        NODES - byzantine,
+        byzantine
+    );
 
     let mut followees: [[bool; NODES]; NODES] = [[false; NODES]; NODES];
     for i in 0..NODES {
@@ -94,22 +124,19 @@ fn init(
     }
 
     for i in 0..NODES {
-        match nodes.get_mut(i) {
-            Some(node) => node.followees_set(followees[i]),
-            None => todo!(),
-        }
+        nodes.get_mut(i).unwrap().followees_set(followees[i]);
     }
 
-    let mut valid_tx_ids: HashSet<u64> = HashSet::new();
+    let mut valid_tx_ids: HashSet<Tx> = HashSet::new();
     for _ in 0..TXS {
-        valid_tx_ids.insert(rng.gen::<u64>());
+        valid_tx_ids.insert(rng.gen::<Tx>());
     }
 
     for i in 0..NODES {
-        let mut pending_txs = HashSet::new();
+        let mut pending_txs: HashSet<Tx> = HashSet::new();
         for id in valid_tx_ids.iter() {
             if rng.gen_bool(p_tx_dist) {
-                pending_txs.insert(Tx::new(*id));
+                pending_txs.insert(*id);
             }
         }
         nodes.get_mut(i).unwrap().pending_txs_set(pending_txs);
@@ -120,18 +147,18 @@ fn init(
 
 fn results(nodes: &Vec<Box<dyn Node<NODES>>>) {
     for i in 0..NODES {
-        let txs_ids: Vec<u64> = nodes
+        let txs: Vec<Tx> = nodes
             .get(i)
             .unwrap()
             .followers_send()
             .iter()
-            .map(|tx| tx.id)
+            .map(|tx| *tx)
             .collect();
 
         log::info!(
             "Transaction ids that Node {} believes consensus on:\n\t{:?}",
             i,
-            txs_ids
+            txs
         );
     }
 }
