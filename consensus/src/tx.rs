@@ -1,8 +1,8 @@
 pub type Tx = u64;
 
 pub struct Candidate {
-    tx: Tx,
-    sender: u64,
+    pub tx: Tx,
+    pub sender: u64,
 }
 
 impl Candidate {

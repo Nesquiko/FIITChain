@@ -9,15 +9,16 @@ use consensus::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ROUNDS: u64 = 20;
+const ROUNDS: u64 = 10;
 const NODES: usize = 100;
 const TXS: usize = 500;
 
 #[test]
 fn simulation() {
     env_logger::init();
+
     let p_graph: f64 = 0.1;
-    let p_byzantine: f64 = 0.15;
+    let p_byzantine: f64 = 0.45;
     let p_tx_dist: f64 = 0.01;
 
     let (mut nodes, valid_tx_ids, followees) = init(p_graph, p_byzantine, p_tx_dist);
@@ -80,7 +81,8 @@ fn init(
     let mut nodes: Vec<Box<dyn Node<NODES>>> = Vec::with_capacity(NODES);
     // Repeatable randomness, either change seed or use `rand::thread_rng()`
     // for pseudo randomness
-    let mut rng = StdRng::seed_from_u64(123124);
+    let mut rng = StdRng::seed_from_u64(23195820964131346);
+    let byzantine_rng = StdRng::seed_from_u64(889237982352315235);
     let mut byzantine = 0;
     for i in 0..NODES {
         let node: Box<dyn Node<NODES>>;
@@ -90,13 +92,7 @@ fn init(
                 1 => ByzantineBehaviour::Selfish,
                 _ => ByzantineBehaviour::Mix(0.5),
             };
-            node = Box::new(ByzantineNode::new(
-                behaviour,
-                p_graph,
-                p_byzantine,
-                p_tx_dist,
-                ROUNDS,
-            ));
+            node = Box::new(ByzantineNode::new(behaviour, ROUNDS, byzantine_rng.clone()));
             byzantine += 1;
         } else {
             node = Box::new(TrustedNode::new(p_graph, p_byzantine, p_tx_dist, ROUNDS));
@@ -146,19 +142,30 @@ fn init(
 }
 
 fn results(nodes: &Vec<Box<dyn Node<NODES>>>) {
+    let mut consensus: HashSet<Vec<Tx>> = HashSet::new();
     for i in 0..NODES {
-        let txs: Vec<Tx> = nodes
-            .get(i)
-            .unwrap()
-            .followers_send()
-            .iter()
-            .map(|tx| *tx)
-            .collect();
+        let node = nodes.get(i).unwrap();
+        if node.is_byzantine() {
+            continue;
+        }
+        let mut txs: Vec<Tx> = node.followers_send().iter().map(|tx| *tx).collect();
+        txs.sort();
+        consensus.insert(txs.clone());
 
-        log::info!(
+        log::trace!(
             "Transaction ids that Node {} believes consensus on:\n\t{:?}",
             i,
             txs
         );
     }
+
+    log::info!(
+        "There are {} different consensuses reached",
+        consensus.len()
+    );
+    assert_eq!(consensus.len(), 1);
+    log::info!(
+        "count of tx upon which consensus was reached on {}",
+        consensus.iter().collect::<Vec<_>>().get(0).unwrap().len()
+    );
 }
