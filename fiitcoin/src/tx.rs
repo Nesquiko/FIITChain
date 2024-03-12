@@ -125,6 +125,14 @@ pub struct Tx {
 }
 
 impl Tx {
+    pub fn coinbase(value: u32, address: VerifyingKey<Sha256>) -> Self {
+        let mut unsigned = UnsignedTx::new();
+        unsigned.add_output(value, &address);
+        // the unwrap is safe, because coinbase doesn't have any input,
+        // so no need to sign any
+        unsigned.finalize().unwrap()
+    }
+
     pub fn hash(&self) -> [u8; 32] {
         self.hash
     }
