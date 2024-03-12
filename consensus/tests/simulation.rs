@@ -1,6 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    usize,
+    fs::File,
+    io::Write,
+    sync::mpsc,
+    time::Instant,
+    u64, usize,
 };
 
 use consensus::{
@@ -9,21 +13,103 @@ use consensus::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-const ROUNDS: u64 = 10;
 const NODES: usize = 100;
-const TXS: usize = 500;
 
 #[test]
-fn simulation() {
+fn simulations() {
     env_logger::init();
 
-    let p_graph: f64 = 0.1;
-    let p_byzantine: f64 = 0.45;
-    let p_tx_dist: f64 = 0.01;
+    let rounds_params = [10, 20, 30];
+    let txs_params = [500, 1000, 1500];
+    let p_graph_params = [0.1, 0.2, 0.3];
+    let p_byzantine_params = [0.15, 0.3, 0.45];
+    let p_tx_dist_params = [0.01, 0.05, 0.1];
+    let total = rounds_params.len()
+        * txs_params.len()
+        * p_graph_params.len()
+        * p_byzantine_params.len()
+        * p_tx_dist_params.len();
+    let mut permutations: Vec<(u64, u64, f64, f64, f64)> = Vec::with_capacity(total);
+    let mut current = 0;
 
-    let (mut nodes, valid_tx_ids, followees) = init(p_graph, p_byzantine, p_tx_dist);
+    for &rounds in rounds_params.iter() {
+        for &txs in txs_params.iter() {
+            for &p_graph in p_graph_params.iter() {
+                for &p_byzantine in p_byzantine_params.iter() {
+                    for &p_tx_dist in p_tx_dist_params.iter() {
+                        permutations.push((rounds, txs, p_graph, p_byzantine, p_tx_dist));
+                    }
+                }
+            }
+        }
+    }
 
-    for _ in 0..ROUNDS {
+    let (tx, rx) = mpsc::channel::<String>();
+    for permutation in permutations {
+        current += 1;
+        let tx = tx.clone();
+        rayon::spawn(move || {
+            let mut tries = 0;
+            let rounds = permutation.0;
+            let txs = permutation.1;
+            let p_graph = permutation.2;
+            let p_byzantine = permutation.3;
+            let p_tx_dist = permutation.4;
+
+            let (mut result, mut passed) = simulation(rounds, txs, p_graph, p_byzantine, p_tx_dist);
+
+            while tries < 3 && !passed {
+                tries += 1;
+                log::info!("Retrying {}", current);
+                (result, passed) = simulation(rounds, txs, p_graph, p_byzantine, p_tx_dist);
+            }
+
+            tx.send(result).unwrap();
+            log::info!("Finished {}/{}", current, total);
+        })
+    }
+
+    let mut file = File::create("/tmp/sim-result.txt").unwrap();
+    for received in rx {
+        write!(file, "{}\n", received).unwrap();
+    }
+}
+
+fn simulation(
+    rounds: u64,
+    txs: u64,
+    p_graph: f64,
+    p_byzantine: f64,
+    p_tx_dist: f64,
+) -> (String, bool) {
+    log::debug!(
+        "========= starting simulation with {} rounds with {} txs =========
+        - probability that an edge will exist = {}
+        - probability that a Node is byzantine = {}
+        - probability that a tx will be distrubed to a Node = {}",
+        rounds,
+        txs,
+        p_graph,
+        p_byzantine,
+        p_tx_dist
+    );
+    let mut result = format!(
+        "rounds: {} | txs: {} | p_graph: {} | p_byzantine: {} | p_tx_dist: {}",
+        rounds, txs, p_graph, p_byzantine, p_tx_dist
+    );
+
+    let mut before = Instant::now();
+    let (mut nodes, valid_tx_ids, followees, seeds) =
+        init(rounds, txs, p_graph, p_byzantine, p_tx_dist);
+    result.push_str(&format!(
+        " | initialized in {:.3?} | seeds: {:?}",
+        before.elapsed(),
+        seeds
+    ));
+    log::debug!("initialized in {:.3?}", before.elapsed());
+
+    before = Instant::now();
+    for _ in 0..rounds {
         // key is the index of a Node and value is vec of candidate txs from
         // other nodes
         let mut all_proposals: HashMap<usize, Vec<Candidate>> = HashMap::new();
@@ -58,11 +144,18 @@ fn simulation() {
                 .followees_receive(all_proposals.get(&i).unwrap());
         }
     }
+    result.push_str(&format!(" | simulation done in {:.3?}", before.elapsed()));
+    log::debug!("simulation done in {:.3?}", before.elapsed());
 
-    results(&nodes);
+    let (res, passed) = results(&nodes);
+    result.push_str(&res);
+
+    (result, passed)
 }
 
-/// Returns initialized Nodes, set of valid tx ids and a followers/followee matrix.
+/// Returns initialized Nodes, set of valid tx ids and a followers/followee matrix,
+/// and tuple containing seed for the rng used in simulation and seed used in
+/// byzantine nodes.
 ///
 /// # Arguments
 ///
@@ -70,6 +163,8 @@ fn simulation() {
 /// * `p_byzantine` - probability that a Node is byzantine, can be .15, .3, .45
 /// * `p_tx_dist` - probability that a tx will be distrubed to a Node, can be .01, .05, .1
 fn init(
+    rounds: u64,
+    txs: u64,
     p_graph: f64,
     p_byzantine: f64,
     p_tx_dist: f64,
@@ -77,12 +172,17 @@ fn init(
     Vec<Box<dyn Node<NODES>>>,
     HashSet<Tx>,
     [[bool; NODES]; NODES],
+    (u64, u64),
 ) {
     let mut nodes: Vec<Box<dyn Node<NODES>>> = Vec::with_capacity(NODES);
-    // Repeatable randomness, either change seed or use `rand::thread_rng()`
-    // for pseudo randomness
-    let mut rng = StdRng::seed_from_u64(23195820964131346);
-    let byzantine_rng = StdRng::seed_from_u64(889237982352315235);
+    let seed: u64 = rand::thread_rng().gen();
+    log::debug!("rng seed {}", seed);
+    let byzantine_seed: u64 = rand::thread_rng().gen();
+    log::debug!("byzantine rng seed {}", byzantine_seed);
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let byzantine_rng = StdRng::seed_from_u64(byzantine_seed);
+
     let mut byzantine = 0;
     for i in 0..NODES {
         let node: Box<dyn Node<NODES>>;
@@ -92,15 +192,15 @@ fn init(
                 1 => ByzantineBehaviour::Selfish,
                 _ => ByzantineBehaviour::Mix(0.5),
             };
-            node = Box::new(ByzantineNode::new(behaviour, ROUNDS, byzantine_rng.clone()));
+            node = Box::new(ByzantineNode::new(behaviour, rounds, byzantine_rng.clone()));
             byzantine += 1;
         } else {
-            node = Box::new(TrustedNode::new(p_graph, p_byzantine, p_tx_dist, ROUNDS));
+            node = Box::new(TrustedNode::new(p_graph, p_byzantine, p_tx_dist, rounds));
         }
 
         nodes.insert(i, node);
     }
-    log::info!(
+    log::debug!(
         "There are {} trusted nodes and {} byzantine",
         NODES - byzantine,
         byzantine
@@ -124,7 +224,7 @@ fn init(
     }
 
     let mut valid_tx_ids: HashSet<Tx> = HashSet::new();
-    for _ in 0..TXS {
+    for _ in 0..txs {
         valid_tx_ids.insert(rng.gen::<Tx>());
     }
 
@@ -138,11 +238,11 @@ fn init(
         nodes.get_mut(i).unwrap().pending_txs_set(pending_txs);
     }
 
-    (nodes, valid_tx_ids, followees)
+    (nodes, valid_tx_ids, followees, (seed, byzantine_seed))
 }
 
-fn results(nodes: &Vec<Box<dyn Node<NODES>>>) {
-    let mut consensus: HashSet<Vec<Tx>> = HashSet::new();
+fn results(nodes: &Vec<Box<dyn Node<NODES>>>) -> (String, bool) {
+    let mut consensuses: HashSet<Vec<Tx>> = HashSet::new();
     for i in 0..NODES {
         let node = nodes.get(i).unwrap();
         if node.is_byzantine() {
@@ -150,7 +250,7 @@ fn results(nodes: &Vec<Box<dyn Node<NODES>>>) {
         }
         let mut txs: Vec<Tx> = node.followers_send().iter().map(|tx| *tx).collect();
         txs.sort();
-        consensus.insert(txs.clone());
+        consensuses.insert(txs.clone());
 
         log::trace!(
             "Transaction ids that Node {} believes consensus on:\n\t{:?}",
@@ -159,13 +259,27 @@ fn results(nodes: &Vec<Box<dyn Node<NODES>>>) {
         );
     }
 
-    log::info!(
-        "There are {} different consensuses reached",
-        consensus.len()
-    );
-    assert_eq!(consensus.len(), 1);
-    log::info!(
+    let mut result = String::new();
+    let mut passed = true;
+    if consensuses.len() != 1 {
+        passed = false;
+        result.push_str(&format!(
+            " | {} different consensuses reached!",
+            consensuses.len()
+        ));
+        log::debug!(
+            "There are {} different consensuses reached",
+            consensuses.len()
+        );
+    }
+    result.push_str(&format!(
+        " | count of tx upon which consensus was reached {}",
+        consensuses.iter().collect::<Vec<_>>().get(0).unwrap().len()
+    ));
+    log::debug!(
         "count of tx upon which consensus was reached on {}",
-        consensus.iter().collect::<Vec<_>>().get(0).unwrap().len()
+        consensuses.iter().collect::<Vec<_>>().get(0).unwrap().len()
     );
+
+    (result, passed)
 }

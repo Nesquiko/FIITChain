@@ -66,10 +66,8 @@ impl<const N: usize> TrustedNode<N> {
 impl<const N: usize> Node<N> for TrustedNode<N> {
     fn followees_set(&mut self, followees: [bool; N]) {
         self.followees = followees;
-
         let probable_followers = (N as f64 * self.p_graph).ceil();
         let probable_byzantines = (N as f64 * self.p_byzantine).ceil();
-
         self.consensus_threshold = f64::min(probable_followers - probable_byzantines, 1.) as usize;
     }
 
