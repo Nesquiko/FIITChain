@@ -107,28 +107,68 @@ fn outputs_greater_than_inputs() {
 
 #[test]
 // Phase 1 test 11
-fn output_double_spend() {
+fn output_doublespend() {
     common::initialize();
 
     let bob = Participant::new();
     let alice = Participant::new();
+    let charlie = Participant::new();
 
-    let (utxo_pool, root_tx) = setup_pool(&bob, OUTPUT_VALUE, 1);
+    let (utxo_pool, root_tx) = setup_pool(&bob, 4 * OUTPUT_VALUE, 1);
     let mut handler = Handler::new(utxo_pool);
 
-    let to_alice_tx = new_tx(NewTxParams {
+    let tx1 = new_tx(NewTxParams {
         sender: &bob,
         inputs: &[(&root_tx, 0)],
-        outputs: &[(&alice, 10)],
-        return_to_sender: Some(13),
+        outputs: &[(&alice, 100), (&alice, 100), (&charlie, 200)],
+        return_to_sender: None,
     });
-    let to_alice_doublespend = to_alice_tx.clone();
+    let tx2 = new_tx(NewTxParams {
+        sender: &bob,
+        inputs: &[(&root_tx, 0)],
+        outputs: &[(&charlie, 150)],
+        return_to_sender: Some(50),
+    });
 
-    let txs = handler.handle(vec![&to_alice_tx, &to_alice_doublespend]);
-    assert_eq!(1, txs.len());
+    let tx3_from_tx1 = new_tx(NewTxParams {
+        sender: &alice,
+        inputs: &[(&tx1, 0)],
+        outputs: &[(&bob, 100)],
+        return_to_sender: None,
+    });
+    let tx4_from_tx1 = new_tx(NewTxParams {
+        sender: &alice,
+        inputs: &[(&tx1, 0)],
+        outputs: &[(&charlie, 100)],
+        return_to_sender: None,
+    });
 
-    assert_eq!(10, balance_of(handler.pool(), alice.vk.as_ref()));
-    assert_eq!(13, balance_of(handler.pool(), bob.vk.as_ref()));
+    let tx5_from_tx2 = new_tx(NewTxParams {
+        sender: &charlie,
+        inputs: &[(&tx2, 0)],
+        outputs: &[(&alice, 150)],
+        return_to_sender: None,
+    });
+    let tx6_from_tx2 = new_tx(NewTxParams {
+        sender: &charlie,
+        inputs: &[(&tx2, 0)],
+        outputs: &[(&bob, 150)],
+        return_to_sender: None,
+    });
+
+    let txs = handler.handle(vec![
+        &tx2,
+        &tx4_from_tx1,
+        &tx5_from_tx2,
+        &tx6_from_tx2,
+        &tx1,
+        &tx3_from_tx1,
+    ]);
+    assert_eq!(2, txs.len());
+
+    assert_eq!(150, balance_of(handler.pool(), alice.vk.as_ref()));
+    assert_eq!(50, balance_of(handler.pool(), bob.vk.as_ref()));
+    assert_eq!(0, balance_of(handler.pool(), charlie.vk.as_ref()));
 }
 
 #[test]

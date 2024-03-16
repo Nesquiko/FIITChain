@@ -20,6 +20,10 @@ impl BlockHandler {
         Self { chain }
     }
 
+    pub fn hash_at_max_height(&self) -> [u8; 32] {
+        self.chain.block_at_max_height().hash()
+    }
+
     pub fn process_block(&mut self, block: Block) -> bool {
         self.chain.add_block(block)
     }
@@ -28,7 +32,7 @@ impl BlockHandler {
         self.chain.add_tx(tx);
     }
 
-    pub fn create_block(&mut self, address: VerifyingKey<Sha256>) -> bool {
+    pub fn create_block(&self, address: &VerifyingKey<Sha256>) -> Block {
         let parent = self.chain.block_at_max_height();
         let mut new_b = IncompleteBlock::new(parent.hash(), address);
 
@@ -42,8 +46,25 @@ impl BlockHandler {
         for &tx in handled.iter() {
             new_b.add_tx(tx.clone());
         }
-        let b = new_b.finalize();
+        new_b.finalize()
+    }
 
-        self.chain.add_block(b)
+    pub fn create_fork(
+        &self,
+        parent_hash: [u8; 32],
+        address: &VerifyingKey<Sha256>,
+    ) -> Option<Block> {
+        let (parent, utxo_pool) = self.chain.at_block_hash(parent_hash)?;
+        let mut new_b = IncompleteBlock::new(parent.hash(), address);
+        let mut handler = Handler::new(utxo_pool.clone());
+
+        let tx_pool = self.chain.tx_pool_at_max_height();
+        let txs = tx_pool.txs();
+        let handled = handler.handle(txs);
+
+        for &tx in handled.iter() {
+            new_b.add_tx(tx.clone());
+        }
+        Some(new_b.finalize())
     }
 }

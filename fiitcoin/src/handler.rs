@@ -30,6 +30,9 @@ pub trait TxHandler<'a> {
     /// Returns mutable reference to internal pool
     fn pool_mut(&mut self) -> &mut UTXOPool;
 
+    /// Moves internal pool, while consuming self
+    fn move_pool(self) -> UTXOPool;
+
     /// Checks if:
     ///     1. All UTXO inputs are in pool
     ///     2. Signatures on inputs are valid
@@ -174,6 +177,18 @@ impl<'a> TxHandler<'a> for Handler {
         handled
     }
 
+    fn pool(&self) -> &UTXOPool {
+        &self.pool
+    }
+
+    fn pool_mut(&mut self) -> &mut UTXOPool {
+        &mut self.pool
+    }
+
+    fn move_pool(self) -> UTXOPool {
+        self.pool
+    }
+
     fn apply_tx(&mut self, tx: &Tx) {
         for input in tx.inputs().iter() {
             self.pool.remove_utxo(&input_to_utxo(input));
@@ -184,14 +199,6 @@ impl<'a> TxHandler<'a> for Handler {
             // caller, so I can't consume it
             self.pool.add_utxo(utxo, &output)
         }
-    }
-
-    fn pool(&self) -> &UTXOPool {
-        &self.pool
-    }
-
-    fn pool_mut(&mut self) -> &mut UTXOPool {
-        &mut self.pool
     }
 }
 
@@ -264,6 +271,10 @@ impl<'a> TxHandler<'a> for MaxFeeHandler {
 
     fn pool_mut(&mut self) -> &mut UTXOPool {
         &mut self.pool
+    }
+
+    fn move_pool(self) -> UTXOPool {
+        self.pool
     }
 }
 

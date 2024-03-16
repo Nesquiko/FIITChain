@@ -4,7 +4,7 @@ use rsa::RsaPublicKey;
 
 use crate::tx::Output;
 
-#[derive(Eq, PartialEq, Hash, Clone)]
+#[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct UTXO {
     /// hash of tx from which this utxo comes from
     tx_hash: [u8; 32],
@@ -21,7 +21,7 @@ impl UTXO {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UTXOPool {
     /// collection of unspent UTXO mapped to corresponding tx output
     utxos: HashMap<UTXO, Output>,

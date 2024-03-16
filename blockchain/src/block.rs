@@ -13,7 +13,7 @@ pub struct IncompleteBlock {
 }
 
 impl IncompleteBlock {
-    pub fn new(prev: Sha256Digest, address: VerifyingKey<Sha256>) -> Self {
+    pub fn new(prev: Sha256Digest, address: &VerifyingKey<Sha256>) -> Self {
         let coinbase = fiitcoin::tx::Tx::coinbase(COINBASE, address);
         Self {
             prev,
@@ -67,5 +67,22 @@ pub struct Block {
 impl Block {
     pub fn hash(&self) -> [u8; 32] {
         self.hash
+    }
+
+    pub fn coinbase(&self) -> &fiitcoin::tx::Tx {
+        &self.coinbase
+    }
+
+    pub fn txs(&self) -> &Vec<fiitcoin::tx::Tx> {
+        &self.txs
+    }
+
+    pub fn prev(&self) -> [u8; 32] {
+        self.prev
+    }
+
+    /// # DO NOT USE, don't use this function outside tests!
+    pub fn set_prev(&mut self, prev: Sha256Digest) {
+        self.prev = prev;
     }
 }
