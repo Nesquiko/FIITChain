@@ -2,7 +2,8 @@
 members = [
     "blockchain",
     "consensus",
-    "fiitcoin"
+    "fiitcoin",
+    "multisig"
 ]
 
 resolver = "2"

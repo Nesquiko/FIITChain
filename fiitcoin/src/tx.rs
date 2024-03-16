@@ -34,7 +34,6 @@ impl Input {
 
 #[derive(Debug, Clone)]
 pub struct Output {
-    /// Value of this output in FIITCoins
     value: u32,
     verifying_key: VerifyingKey<Sha256>,
 }
