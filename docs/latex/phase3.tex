@@ -1,0 +1,136 @@
+\section{Phase 3 - Blockchain}
+
+\subsection{Assignment}
+
+In this phase, create a node which is part of a distributed consensus protocol
+based on UTXO blockchain. Implemented code will receive incoming transactions and
+blocks, and maintain and update them. Reuse code from Phase 1(\ref{phase1}).
+
+Blockchain is responsible for maintaining a chain of blocks. Because whole
+chain would be big, only keep few newest blocks.
+
+In this chain, forks can occur, so it is needed to maintain corresponding
+UTXO pool.
+
+New genesis block will not be mined, ignore any new block which is trying to be
+a genesis block. When a fork occurs, at the max height of the chain is the newest
+block. If a reorg happens after a fork, don't put transactions from the shorter
+branch into the mempool. Also fees are neglected.
+
+Bonus for implementing a multisig transactions.
+
+\subsection{Implementation}
+
+Implementation for this phase is in submodule. The main
+code is in \emph{blockchain/src/blockchain.rs}. In there is a struct called
+\texttt{Blockchain} which contains a ring buffer holding the most recent
+blocks, and a mempool for unprocessed transactions. For manipulation with
+the \texttt{Blockchain} struct, \texttt{BlockHandler} from \emph{blockchain/src/handler.rs}
+should be used.
+
+\pagebreak
+\texttt{BlockHandler} has two methods for creating blocks:
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={BlockHandler}]
+impl BlockHandler {
+    pub fn create_block(&self, address: &VerifyingKey<Sha256>) -> Block {
+        let parent = self.chain.block_at_max_height();
+        let mut new_b = IncompleteBlock::new(parent.hash(), address);
+
+        let utxo_pool = self.chain.utxo_pool_at_max_height();
+        let mut handler = Handler::new(utxo_pool.clone());
+
+        let tx_pool = self.chain.tx_pool_at_max_height();
+        let txs = tx_pool.txs();
+        let handled = handler.handle(txs);
+
+        for &tx in handled.iter() {
+            new_b.add_tx(tx.clone());
+        }
+        new_b.finalize()
+    }
+
+    pub fn create_fork(
+        &self,
+        parent_hash: [u8; 32],
+        address: &VerifyingKey<Sha256>,
+    ) -> Option<Block> {
+        let (parent, utxo_pool) = self.chain.at_block_hash(parent_hash)?;
+        let mut new_b = IncompleteBlock::new(parent.hash(), address);
+        let mut handler = Handler::new(utxo_pool.clone());
+
+        let tx_pool = self.chain.tx_pool_at_max_height();
+        let txs = tx_pool.txs();
+        let handled = handler.handle(txs);
+
+        for &tx in handled.iter() {
+            new_b.add_tx(tx.clone());
+        }
+        Some(new_b.finalize())
+    }
+}
+\end{lstlisting}
+
+\texttt{create\_block} is used when a new block is appended after linearly
+to the chain, and \texttt{create\_fork} is used when a fork in chain is created.
+Each of these two functions reuses the handler from Phase 1(\ref{phase1}),
+and only bundles valid transactions into new block.
+
+Then after creating a block, it can be added with \texttt{BlockHandler::process\_block},
+which calls method \texttt{Blockchain::add\_block}:
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={Blockchain::add\_block}]
+impl Blockchain {
+    pub fn add_block(&mut self, block: Block) -> bool {
+        let node = match self.at_block_hash(block.prev()) {
+            Some(parent) => parent,
+            None => return false,
+        };
+
+        let mut handler = fiitcoin::handler::Handler::new(node.1.clone());
+        let txs: Vec<&fiitcoin::tx::Tx> = block.txs().iter().map(|tx| tx).collect();
+
+        if handler.handle(txs).len() != block.txs().len() {
+            log::warn!("Block contained invalid txs!");
+            return false;
+        };
+
+        for tx in block.txs().iter() {
+            self.mempool.remove(tx.hash());
+        }
+        self.chain.push((block, handler.move_pool()));
+
+        true
+    }
+}
+\end{lstlisting}
+
+This method validates that the parent of the proposed block exists in the buffer,
+if yes, once again validates all transactions, updates state of the mempool, and
+appends the block to the chain.
+
+\subsection{Tests}
+
+Tests for this phase are in \emph{blockchain/tests/tests.rs}. Some tests cover
+more than one test case from assignment, they have a comment above them
+mentioning which tests they cover. To run them navigate to \emph{blockchain}
+and run this command:
+
+\begin{verbatim}
+RUST_LOG=debug cargo test --release 
+\end{verbatim}
+
+\subsection{Multisig bonus}
+
+The multisig implementation is in \emph{multisig}. I copied all needed files
+from previous phases there, because I didn't want to break any existing tests.
+
+I changed transaction outputs from having only one verifier, to holding a list
+of verifiers and having a threshold indicating how many valid signatures are
+needed to unlock given output. Also each transaction input has a list of signatures
+which are used to unlock corresponding output.
+
+Tests are in \emph{multisig/tests}, in \emph{multisig/tests/multisig\_tx.rs} are
+tests just testing individual transactions and in
+\emph{multisig/tests/multisig\_blockchain.rs} are tests for using these multisig
+transactions in blockchain.
