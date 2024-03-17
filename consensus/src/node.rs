@@ -1,7 +1,4 @@
-use std::{
-    cmp::min,
-    collections::{HashMap, HashSet},
-};
+use std::collections::{HashMap, HashSet};
 
 use rand::{rngs::StdRng, Rng};
 
@@ -38,7 +35,6 @@ pub struct TrustedNode<const N: usize> {
     followees: [bool; N],
     /// The initial set of txs given to this Node
     pending_txs: HashSet<Tx>,
-
     /// Map of txs to set of its proposers
     received_txs: HashMap<Tx, HashSet<u64>>,
     consensus_reached: HashSet<Tx>,

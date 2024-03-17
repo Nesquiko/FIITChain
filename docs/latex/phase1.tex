@@ -1,0 +1,233 @@
+\section{Phase 1 - Simple Coin}
+
+\subsection{Assignment}
+
+Centralized authority FIIT accepts transactions from users. Implement logic
+for processing transactions into a ledger. FIIT groups transactions into 
+into a pseudo blockchain. In each block, FIIT will receive list of transactions
+which are validated, applied and subset of valid ones is returned.
+
+These transactions can depend on each other, there may be double-spends, and
+otherwise invalid transactions.
+
+In this phase, implement a UTXO FIIT chain, which in each epoch takes a list
+of proposed transactions, validates them, applies valid ones to its internal
+state and returns a subset of valid ones. The size of the subset isn't defined.
+
+Also implement a version in which, not only validity is checked, but also transactions
+are processed in order to maximize received fees.
+
+\subsection{Implementation}
+
+Implementation for this phase is in submodule \emph{fiitcoin}. This submodule
+is a Rust library crate, so I could easily reuse it in next phases with importing
+it as a dependency.
+
+Required handlers are in rust file \emph{fiitcoin/src/handler.rs}. Both implement
+common trait \texttt{TxHandler}:
+
+\pagebreak
+\begin{lstlisting}[language=Rust, style=boxed, caption={TxHandler}]
+pub trait TxHandler<'a> {
+    /// Each epoch accepts unordered vector of proposed transactions.
+    /// Checks validity of each, internally updates the UTXO pool, and
+    /// returns vector of valid ones.
+    ///
+    /// # Beware
+    /// Transactions can be dependent on other ones. Also, multiple
+    /// transactions can reference same output.
+    fn handle(&mut self, possible_txs: Vec<&'a Tx>) -> Vec<&'a Tx>;
+
+    /// Returns reference to internal pool
+    fn pool(&self) -> &UTXOPool;
+
+    /// Returns mutable reference to internal pool
+    fn pool_mut(&mut self) -> &mut UTXOPool;
+
+    /// Moves internal pool, while consuming self
+    fn move_pool(self) -> UTXOPool;
+
+    /// Checks if:
+    ///     1. All UTXO inputs are in pool
+    ///     2. Signatures on inputs are valid
+    ///     3. No UTXO is used more than once
+    ///     4. Sum of outputs is not negative
+    ///     5. Sum of inputs >= Sum of outputs
+    fn is_tx_valid(&self, tx: &Tx) -> bool;
+
+    /// Filters independent txs from dependent ones,
+    /// applies them and returns both sets
+    fn handle_independent(
+        &mut self,
+        txs: Vec<&'a Tx>
+    ) -> (Vec<&'a Tx>, Vec<&'a Tx>);
+
+    /// Applies given tx to the internal pool
+    fn apply_tx(&mut self, tx: &Tx);
+
+
+    fn is_input_in_pool(&self, input: &Input) -> bool;
+}
+\end{lstlisting}
+
+Methods \texttt{is\_tx\_valid}, \texttt{handle\_independent}
+\texttt{apply\_tx}, \texttt{is\_input\_in\_pool} have
+default implementations in the trait declaration, because all of them are used
+in both handlers. Methods \texttt{handle}, \texttt{pool}, \texttt{pool\_mut},
+and \texttt{move\_pool} are implemented in each handler.
+
+The \texttt{is\_tx\_valid} function is self explanatory, and all checks, which
+are performed are listed in its doc comment.
+
+The \texttt{handle\_independent} function is used to separate transactions,
+which are not dependent on transactions in the currently proposed list and can be
+applied right away, from invalid and dependent transactions. The valid independent
+ones are also applied to the internal state.
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={handle\_independent}]
+/// Filters independent txs from dependent ones,
+/// applies them and returns both sets
+fn handle_independent(
+    &mut self,
+    txs: Vec<&'a Tx>
+) -> (Vec<&'a Tx>, Vec<&'a Tx>) {
+    let mut handled = vec![];
+    let mut dependent = vec![];
+    let tx_set: HashSet<[u8; 32]> = txs.iter().map(|&tx| tx.hash()).collect();
+
+    for &tx in txs.iter() {
+        if tx.inputs().iter().all(|i| self.is_input_in_pool(i)) {
+            // tx is only dependent on outputs in pool
+            if self.is_tx_valid(tx) {
+                self.apply_tx(tx);
+                handled.push(tx);
+            }
+        } else if tx
+            .inputs()
+            .iter()
+            .any(|i| tx_set.contains(&i.output_tx_hash()))
+        {
+            // tx is dependent on some outputs from this batch
+            dependent.push(tx)
+        }
+    }
+
+    (handled, dependent)
+}
+\end{lstlisting}
+
+\pagebreak
+The \texttt{apply\_tx} function takes a valid transaction and mutates internal
+state according to the transaction.
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={apply\_tx}]
+/// Applies given tx to the internal pool
+fn apply_tx(&mut self, tx: &Tx) {
+    for input in tx.inputs().iter() {
+        self.pool_mut().remove_utxo(&input_to_utxo(input));
+    }
+    for (i, output) in tx.outputs().iter().enumerate() {
+        let utxo = UTXO::new(tx.hash(), i.try_into().unwrap());
+        self.pool_mut().add_utxo(utxo, &output)
+    }
+}
+\end{lstlisting}
+
+\subsubsection*{Handler}\label{handler}
+
+Handler implements the FIITcoin chain logic of validating, applying and 
+returning valid subset of transactions. It's functionality is very simple,
+loop until there are no dependent transactions, which are retrieved with
+\texttt{handle\_independent} function. At the end returns the subset of
+valid, applied transactions.
+
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={Handler::handle}]
+fn handle(&mut self, possible_txs: Vec<&'a Tx>) -> Vec<&'a Tx> {
+    let mut handled: Vec<&'a Tx> = vec![];
+    let mut to_handle = possible_txs;
+
+    loop {
+        let (independent, dependent) = self.handle_independent(to_handle);
+        handled.extend(independent);
+        if dependent.is_empty() {
+            break;
+        }
+        to_handle = dependent;
+    }
+
+    handled
+}
+\end{lstlisting}
+
+\subsubsection*{MaxFeeHandler}
+
+This implementation of a handler processes transactions in order to maximize
+collected fees. Since there is no maximum count of processed transactions (if
+there was the problem would be NP hard and very similiar to Knapsack Problem\cite{wiki:Knapsack_problem}),
+I choose very simple heuristic how to achieve this\dots Process all valid
+transactions.
+
+Firstly, for each transaction a fee is calculated. The fee is a difference between
+sum of input values and sum of output values.
+
+\[ Fee = \sum_{n=1}^{|inputs|} inputs_n - \sum_{n=1}^{|outputs|} outputs_n \]
+
+Then the initial list of proposed transactions is sorted by their fee, from
+highest to lowest. And then are processed just like in \ref{handler}.
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={MaxFeeHandler::handle}]
+fn handle(&mut self, possible_txs: Vec<&'a Tx>) -> Vec<&'a Tx> {
+    let tx_map: HashMap<[u8; 32], &'a Tx> =
+        possible_txs.iter().map(|&tx| (tx.hash(), tx)).collect();
+
+    let mut with_fees: Vec<(u64, &Tx)> = possible_txs
+        .iter()
+        .filter_map(|&tx| match self.calc_fee(tx, &tx_map) {
+            Some(fee) => Some((fee, tx)),
+            None => None,
+        })
+        .collect();
+    with_fees.sort_unstable_by(|tx1, tx2| tx1.0.cmp(&tx2.0));
+    with_fees.reverse();
+
+    let mut handled: Vec<&'a Tx> = vec![];
+    let mut to_handle = with_fees.iter().map(|tx| tx.1).collect();
+
+    loop {
+        let (independent, dependent) = self.handle_independent(to_handle);
+        handled.extend(independent);
+        if dependent.is_empty() {
+            break;
+        }
+        to_handle = dependent;
+    }
+
+    handled
+}
+\end{lstlisting}
+
+\subsection{Tests}
+
+Tests for this phase are in \emph{fiitcoin/tests}, and are implemented according
+to provided test names in assignment.
+
+Test 1 through 7 are in
+\emph{fiitcoin/tests/is\_tx\_valid\_test.rs}. However test case number 7 isn't
+implemented. This is because in the provided source codes, Java's \texttt{double}
+is used, which is a signed representation of a fractional number\cite{oracleDOUBLEPRECISION}.
+I used Rust's \texttt{u32}\cite{rustlangu32} to denominate value of an output,
+thus testing if a sum of all outputs is negative is meaningless. Even if I created
+a raw bytes representation of a transaction, and instead of unsigned integer
+encoded a signed one, it would be treated as a large unsigned integer, in which
+case the check for sum of inputs being less then or equal to sum of outputs would
+fail, thus creating the same result.
+
+Test 8 through 15 are in \emph{fiitcoin/tests/handler\_test.rs}. And max fee
+tests 1 through 3 are in \emph{fiitcoin/tests/max\_fee\_handler\_test.rs}.
+
+To run these tests, navigate to \emph{fiitcoin} and run this command:
+
+\begin{verbatim}
+$ RUST_LOG=debug cargo test --release
+\end{verbatim}

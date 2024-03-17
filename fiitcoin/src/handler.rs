@@ -139,8 +139,6 @@ pub trait TxHandler<'a> {
         }
         for (i, output) in tx.outputs().iter().enumerate() {
             let utxo = UTXO::new(tx.hash(), i.try_into().unwrap());
-            // clone is here necessary, because I want to return the tx back to
-            // caller, so I can't consume it
             self.pool_mut().add_utxo(utxo, &output)
         }
     }

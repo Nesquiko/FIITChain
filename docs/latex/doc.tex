@@ -1,0 +1,76 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[USenglish]{babel}
+\usepackage[IL2]{fontenc} 
+\usepackage[utf8]{inputenc}
+\usepackage{graphicx}
+\usepackage{url} 
+\usepackage{cite}
+\usepackage{listings}
+% https://github.com/denki/listings-rust
+\usepackage{listings-rust}
+\usepackage{color}
+\usepackage{float}
+\usepackage{subfiles}
+
+\usepackage[colorlinks = true,
+            linkcolor = blue,
+            urlcolor  = blue,
+            citecolor = blue,
+            anchorcolor = blue]{hyperref}
+
+\raggedbottom 
+
+\oddsidemargin=0cm 
+\evensidemargin=0cm
+\textwidth=16.5cm 
+\pagestyle{headings}
+
+\title{DMBLOCK Assignment 1}
+
+\author{Lukáš Častven\\[2pt]
+	{\small Slovenská technická univerzita v Bratislave}\\
+	{\small Fakulta informatiky a informačných technológií}\\
+	{\small \texttt{xcastven@stuba.sk}}
+	}
+
+\date{\small 17 march 2024}
+
+\begin{document}
+\pagestyle{plain}
+
+\maketitle
+\tableofcontents
+\pagebreak
+
+\section{Programming language choice}
+
+For assignment we received a set of Java source codes, which are to be used
+to implement given tasks. Since there is a 5 point bonus for rewritting these
+source codes and implementing this assignment in different language, I choose
+to do it in Rust\cite{rustlangRustProgramming}, because I wanted to better myself in it.
+
+I rewrote provided source codes for each of the three phases into Rust. My source
+codes roughly match the provided ones.
+
+Each phase is in it's separate directory with test as listed in the assignment.
+
+\subsection{Environment details}
+
+This assignment was developed and tested in this environment:
+
+\begin{itemize}
+    \item OS: Arch Linux, Kernel 6.6.21-1-lts,
+    \item Rust compiler: rustc 1.76.0 (07dca489a 2024-02-04),
+    \item Cargo: cargo 1.76.0 (c84b36747 2024-01-18),
+    \item Libraries: each version is listed in corresponging Cargo.toml file.
+\end{itemize}
+
+\subfile{phase1}
+
+\subfile{phase2}
+
+\bibliography{bibliography}
+\bibliographystyle{ieeetr}
+
+\end{document}

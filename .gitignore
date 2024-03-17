@@ -1,2 +1,12 @@
 /target
 .idea
+docs/latex/doc.aux
+docs/latex/doc.bbl
+docs/latex/doc.bcf
+docs/latex/doc.blg
+docs/latex/doc.fls
+docs/latex/doc.log
+docs/latex/doc.out
+docs/latex/doc.run.xml
+docs/latex/doc.synctex.gz
+docs/latex/doc.toc

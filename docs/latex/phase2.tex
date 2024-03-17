@@ -1,0 +1,119 @@
+\section{Phase 2 - Trust and Consensus}
+
+\subsection{Assignment}
+
+Implement algorithm for distributed consensus based on relationalship graph.
+Network is an oriented graph, in which each edge represents a trust relationalship
+between two nodes. If there is an edge $A \rightarrow B$ it means that node $B$
+is a follower of node $A$ ($A$ is a followee of $B$) and listens to transactions
+proposed by $A$.
+
+Nodes in network are either trusted or byzantine. Each trusted node should
+reach consensus with other peers in the network. Implement trusted node,
+which defines how each trusted node in network behaves. Then test this network
+in a simulation with different relationalship graphs and with different parameters.
+At the end of the simulation, each node should return the same subset of transactions,
+upon which consensus was reached. Assume all transactions are valid. Different
+simulation parameters:
+
+\begin{itemize}
+    \item Probability of an edge existing = $p\_graph \in \{0.1, 0.2, 0.3\}$,
+    \item Probability of an node being byzantine = $p\_byzantine \in \{0.15, 0.3, 0.45\}$,
+    \item Probability of a transaction distribution to node = $p\_tx\_dist \in \{0.01, 0.05, 0.1\}$,
+    \item Number of rounds in simulation = $rounds \in \{10, 20\}$.
+\end{itemize}
+
+Also implement a byzantine node. This node acts like an adversary in the network,
+and is trying to distrupt the network. There can up to 45\% of byzantine nodes
+in the network. Their behaviour is:
+
+\begin{itemize}
+    \item Dead - don't resend any transactions,
+    \item Selfish - only resend their transactions,
+    \item Mix - switch between previous two behaviours.
+\end{itemize}
+
+At the end of the simulation, all trusted nodes must return the same subset of
+transactions. The size of this subset should be maximal, and time to reach
+consensus should be reasonable.
+
+\subsection{Implementation}
+
+Implementation for this phase is in submodule \emph{consensus}. This submodule is
+also a Rust library crate, because I didn't know if I will reuse it later or not.
+
+Implementations of trusted and byzantine node are in \emph{consensus/src/node.rs},
+and both of them share common trait \texttt{Node}:
+
+\begin{lstlisting}[language=Rust, style=boxed, caption={Node trait}]
+pub trait Node<const N: usize> {
+    /// If `ith` entry is `true` then this Node follows the `ith` Node
+    fn followees_set(&mut self, followees: [bool; N]);
+
+    /// Initializes proposed set of txs
+    fn pending_txs_set(&mut self, pending_txs: HashSet<Tx>);
+
+    /// Returns proposed txs, which shall be send to this Node's followers.
+    /// After final round, the behaviour changes and it will return txs,
+    /// on which consensus was reached.
+    fn followers_send(&self) -> &HashSet<Tx>;
+
+    /// Candites from different Nodes
+    fn followees_receive(&mut self, candidates: &Vec<Candidate>);
+
+    fn is_byzantine(&self) -> bool;
+}
+\end{lstlisting}
+
+\subsubsection*{TrustedNode}
+
+Trusted node starts with transmitting its transactions, and after receiving
+a set of proposed transactions from followees it starts to track how many
+distinct peers proposed each transaction, and adds each proposed transaction
+to the ones it will transmit in next round.
+
+A trusted node will assume a consensus was reached upon a transaction, if certain
+number of peers propose it back to it. The number is called
+\texttt{consensus\_threshold} in code and is calculated with this formula:
+
+\[ CT = min(1, Probable followers - Probable byzantine nodes) \]
+
+Each node has access to simulation's parameters so it can compute how many
+followers it should have and how many byzantine nodes there are in network.
+
+At the end of a simulation, each node returns the set of transactions upon
+which consensus was reached on.
+
+
+\subsubsection*{ByzantineNode}
+
+Byzantine node is not interesting. It either doesn't resend any transactions,
+only resends its transactions and no other, or switches between these two
+behaviours.
+
+\subsection{Tests}
+
+There is only one test, and that is in \emph{consensus/tests/simulation.rs},
+in which for all permutations of the simulation parameters are parallelly tested.
+Each simulation has a result, and this result is written to \emph{/tmp/sim-result.txt}
+file (in \emph{consensus}, there is a file from this test that I ran).
+
+Since randomness is used to initialize each simulation, if it fails it is rerun,
+but not more than 3 times, in order to make sure that it failed due to a bug, not
+due to an edge case.
+
+Each line in the \emph{consensus/sim-result.txt} contains what parameters were used,
+how long the initialization of the simulation took, what seeds were used for randomness,
+how long the simulation took and what was the size of the transaction subset upon
+which consensus was reached on. If the simulation fails more than 3 times, there
+would an additional entry in the line, which mentions this, but I didn't encounter
+any.
+
+Test cases in assignment are covered by this one simulation which uses all possible
+permutations of parameters.
+
+To run these tests, navigate to \emph{consensus} and run this command:
+
+\begin{verbatim}
+RUST_LOG=info cargo test --release
+\end{verbatim}
