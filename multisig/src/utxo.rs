@@ -1,24 +1,25 @@
-use crate::tx::{Hash, Output};
 use std::collections::HashMap;
+
+use crate::tx::Output;
 
 #[derive(Eq, PartialEq, Hash, Clone, Debug)]
 pub struct UTXO {
     /// hash of tx from which this utxo comes from
-    source_tx_hash: Hash,
-    /// index of the output in source tx
+    tx_hash: [u8; 32],
+    /// index at which this utxo is in tx
     output_idx: u8,
 }
 
 impl UTXO {
-    pub fn new(source_tx_hash: Hash, output_idx: u8) -> Self {
+    pub fn new(tx_hash: [u8; 32], output_idx: u8) -> Self {
         Self {
-            source_tx_hash,
+            tx_hash,
             output_idx,
         }
     }
 
-    pub fn source_tx_hash(&self) -> [u8; 32] {
-        self.source_tx_hash
+    pub fn tx_hash(&self) -> [u8; 32] {
+        self.tx_hash
     }
 
     pub fn output_idx(&self) -> u8 {
@@ -39,8 +40,8 @@ impl UTXOPool {
         }
     }
 
-    pub fn add_utxo(&mut self, utxo: UTXO, output: Output) {
-        self.utxos.insert(utxo, output);
+    pub fn add_utxo(&mut self, utxo: UTXO, output: &Output) {
+        self.utxos.insert(utxo, output.clone());
     }
 
     pub fn remove_utxo(&mut self, utxo: &UTXO) {

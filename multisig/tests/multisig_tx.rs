@@ -1,6 +1,6 @@
 mod common;
 
-use common::{initialize, new_tx, KeyPair, NewTxParams};
+use common::{initialize, new_tx, NewTxParams};
 use multisig::utxo::UTXO;
 
 use crate::common::{new_tx_first_n_signers_only, setup_handler, Wallet};

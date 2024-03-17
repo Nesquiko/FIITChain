@@ -22,6 +22,10 @@ impl Handler {
         Self { pool }
     }
 
+    pub fn move_pool(self) -> UTXOPool {
+        self.pool
+    }
+
     /// Each epoch accepts unordered vector of proposed transactions.
     /// Checks validity of each, internally updates the UTXO pool, and
     /// returns vector of valid ones.
@@ -51,9 +55,7 @@ impl Handler {
         }
         for (i, output) in tx.outputs().iter().enumerate() {
             let utxo = UTXO::new(tx.hash(), i.try_into().unwrap());
-            // clone is here necessary, because I want to return the tx back to
-            // caller, so I can't consume it
-            self.pool.add_utxo(utxo, output.clone())
+            self.pool.add_utxo(utxo, &output)
         }
     }
 

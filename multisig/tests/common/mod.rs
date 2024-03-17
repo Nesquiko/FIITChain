@@ -1,4 +1,7 @@
 use multisig::{
+    block::{Block, IncompleteBlock},
+    block_handler::BlockHandler,
+    blockchain::Blockchain,
     handler::Handler,
     tx::{Tx, UnsignedTx},
     utxo::{UTXOPool, UTXO},
@@ -47,6 +50,14 @@ impl Wallet {
 
     pub fn keys(&self) -> &[KeyPair] {
         &self.keys
+    }
+
+    pub fn verifiers(&self) -> Vec<&VerifyingKey<Sha256>> {
+        self.keys.iter().map(|kp| &kp.vk).collect()
+    }
+
+    pub fn threshold(&self) -> usize {
+        self.threshold
     }
 }
 
@@ -97,7 +108,7 @@ fn create_unsigned_tx(params: &NewTxParams) -> UnsignedTx {
 
     let mut tx = UnsignedTx::new();
     for input in inputs.iter() {
-        tx.add_input(input.source_tx_hash(), input.output_idx());
+        tx.add_input(input.tx_hash(), input.output_idx());
     }
     for output in outputs.iter() {
         let verifiers = output.0.keys.iter().map(|kp| &kp.vk).collect();
@@ -109,6 +120,22 @@ fn create_unsigned_tx(params: &NewTxParams) -> UnsignedTx {
         tx.add_output(*to_return, sks, signer.threshold);
     }
     tx
+}
+
+pub fn setup_block_handler(receiver: &Wallet) -> (BlockHandler, Tx) {
+    let verifiers = receiver.verifiers();
+    let genesis = IncompleteBlock::new([0; 32], verifiers, receiver.threshold).finalize();
+    let (pool, genesis_tx) = setup_genesis_pool(&genesis);
+    let chain = Blockchain::new(genesis, pool);
+    (BlockHandler::new(chain), genesis_tx)
+}
+
+pub fn setup_genesis_pool(genesis_block: &Block) -> (UTXOPool, Tx) {
+    let mut utxo_pool = UTXOPool::new();
+    let coinbase = genesis_block.coinbase();
+    let root_utxo = UTXO::new(coinbase.hash(), 0);
+    utxo_pool.add_utxo(root_utxo, &coinbase.output(0).unwrap());
+    (utxo_pool, coinbase.clone())
 }
 
 pub fn setup_handler(receiver: &Wallet, output_value: u32, root_outputs: u8) -> (Handler, Tx) {
@@ -135,7 +162,7 @@ pub fn setup_pool(receiver: &Wallet, output_value: u32, root_outputs: u8) -> (UT
         let output_idx = output_idx.try_into().unwrap();
         let root_utxo = UTXO::new(root_tx.hash(), output_idx);
         match root_tx.output(output_idx) {
-            Some(output) => utxo_pool.add_utxo(root_utxo, output.clone()),
+            Some(output) => utxo_pool.add_utxo(root_utxo, &output),
             None => panic!(
                 "tx output at index {} out of bounds, outputs len {}",
                 output_idx,

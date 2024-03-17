@@ -88,7 +88,7 @@ impl UnsignedTx {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Tx {
     hash: Hash,
     inputs: Vec<Input>,
@@ -96,9 +96,9 @@ pub struct Tx {
 }
 
 impl Tx {
-    pub fn coinbase(value: u32, address: &VerifyingKey<Sha256>) -> Self {
+    pub fn coinbase(value: u32, address: Vec<&VerifyingKey<Sha256>>, threshold: usize) -> Self {
         let mut unsigned = UnsignedTx::new();
-        unsigned.add_output(value, vec![address], 1);
+        unsigned.add_output(value, address, threshold);
         // coinbase txs don't have inputs, so no signers are needed
         unsigned.finalize(vec![])
     }
@@ -149,7 +149,7 @@ pub struct UnsignedInput {
     output_idx: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Input {
     /// Hash of tx, of which output is transformed into this input
     output_tx_hash: Hash,

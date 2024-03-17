@@ -9,5 +9,6 @@ edition = "2021"
 env_logger = "0.11.3"
 log = "0.4.21"
 rand = "0.8.5"
+ringbuffer = "0.15.0"
 rsa = { version = "0.9.6", features = ["sha2"]}
 sha2 = "0.10.8"
